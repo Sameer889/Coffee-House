@@ -116,16 +116,21 @@ class Admin {
 	}
 
 	public static function get_license_key() {
-		return 'activated';
+		return trim( get_option( self::LICENSE_KEY_OPTION_NAME ) );
 	}
 
 	public static function set_license_key( $license_key ) {
-		return update_option( self::LICENSE_KEY_OPTION_NAME, 'activated' );
+		return update_option( self::LICENSE_KEY_OPTION_NAME, $license_key );
 	}
 
 	public function action_activate_license() {
 		check_admin_referer( 'elementor-pro-license' );
 
+		if ( empty( $_POST['elementor_pro_license_key'] ) ) {
+			wp_die( esc_html__( 'Please enter your license key.', 'elementor-pro' ), esc_html__( 'Elementor Pro', 'elementor-pro' ), [
+				'back_link' => true,
+			] );
+		}
 
 		$license_key = trim( $_POST['elementor_pro_license_key'] );
 
@@ -171,6 +176,22 @@ class Admin {
 			self::PAGE_ID,
 			[ $this, 'display_page' ]
 		);
+
+		if ( API::is_license_expired() ) {
+			add_submenu_page(
+				Settings::PAGE_ID,
+				'',
+				sprintf(
+					'<strong style="color: #DD132F; display: flex; align-items: center; gap: 8px;">
+						<span class="eicon-pro-icon" style="background: white; border-radius: 3px;"></span>
+						%s
+					</strong>',
+					esc_html__( 'Renew Now', 'elementor-pro' )
+				),
+				'manage_options',
+				'elementor_pro_renew_license_menu_link'
+			);
+		}
 	}
 
 	public static function get_url() {
@@ -203,6 +224,14 @@ class Admin {
 						echo wp_kses_post( $this->get_activate_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 					?></p>
 
+					<?php
+						$connect_url = $this->get_connect_url( [
+							'utm_source' => 'license-page',
+							'utm_medium' => 'wp-dash',
+							'utm_campaign' => 'connect-and-activate-license',
+							'utm_term' => 'connect-and-activate',
+						] );
+					?>
 					<div class="elementor-box-action">
 						<a class="button button-primary" href="<?php echo esc_url( $connect_url ); ?>">
 							<?php echo esc_html__( 'Connect & Activate', 'elementor-pro' ); ?>
@@ -230,6 +259,14 @@ class Admin {
 						<?php endif; ?>
 
 						<small>
+							<?php // Fake link to make the user think something is going on. In fact, every refresh of this page will re-check the license status. ?>
+							<a class="button" href="<?php echo esc_url( static::get_url() . '&check-license=1' ); ?>">
+								<i class="eicon-sync"></i>
+								<?php echo esc_html__( 'Check license status', 'elementor-pro' ); ?>
+							</a>
+						</small>
+
+						<small>
 							<a class="button" href="https://go.elementor.com/my-account/">
 								<?php echo esc_html__( 'My Account', 'elementor-pro' ); ?>
 							</a>
@@ -246,8 +283,8 @@ class Admin {
 								),
 								'<strong>',
 								'</strong>',
-								'<a href="https://go.elementor.com/renew/" target="_blank">',
-								'</a>'
+								'<a href="https://go.elementor.com/renew/" target="_blank"><strong>',
+								'</strong></a>'
 							); ?>
 						</p>
 					<?php endif; ?>
@@ -289,7 +326,15 @@ class Admin {
 
 						<?php echo esc_html__( 'Want to activate this website by a different license?', 'elementor-pro' ); ?>
 						</span>
-						<a class="button button-primary" href="<?php echo esc_url( $this->get_switch_license_url() ); ?>">
+						<?php
+							$switch_license_url = $this->get_switch_license_url( [
+								'utm_source' => 'license-page',
+								'utm_medium' => 'wp-dash',
+								'utm_campaign' => 'connect-and-activate-license',
+								'utm_term' => 'switch-license',
+							] );
+						?>
+						<a class="button button-primary" href="<?php echo esc_url( $switch_license_url ); ?>">
 							<?php echo esc_html__( 'Switch Account', 'elementor-pro' ); ?>
 						</a>
 					</p>
@@ -412,6 +457,17 @@ class Admin {
 					)
 				);
 			}
+
+			$admin_notices->print_admin_notice( [
+				'title' => $title,
+				'description' => $description,
+				'type' => 'warning',
+				'button' => [
+					'text' => esc_html__( 'Renew now', 'elementor-pro' ),
+					'url' => $renew_url,
+					'type' => 'warning',
+				],
+			] );
 		}
 	}
 
@@ -458,7 +514,39 @@ class Admin {
 	}
 
 	public function plugin_action_links( $links ) {
+		$license_key = self::get_license_key();
+
+		if ( empty( $license_key ) ) {
+			$links['active_license'] = sprintf(
+				'<a href="%s" class="elementor-plugins-gopro">%s</a>',
+				self::get_connect_url([
+					'utm_source' => 'wp-plugins',
+					'utm_medium' => 'wp-dash',
+					'utm_campaign' => 'connect-and-activate-license',
+				]),
+				__( 'Connect & Activate', 'elementor-pro' )
+			);
+		}
+
+		if ( API::is_license_expired() ) {
+			$links['renew_license'] = sprintf(
+				'<a href="%s" class="elementor-plugins-gopro" target="_blank">%s</a>',
+				'https://go.elementor.com/wp-plugins-renew/',
+				__( 'Renew Now', 'elementor-pro' )
+			);
+		}
+
 		return $links;
+	}
+
+	public function plugin_auto_update_setting_html( $html, $plugin_file ) {
+		$license_data = API::get_license_data();
+
+		if ( ELEMENTOR_PRO_PLUGIN_BASE === $plugin_file && API::STATUS_VALID !== $license_data['license'] ) {
+			return '<span class="label">' . esc_html__( '(unavailable)', 'elementor-pro' ) . '</span>';
+		}
+
+		return $html;
 	}
 
 	private function handle_dashboard_admin_widget() {
@@ -477,6 +565,14 @@ class Admin {
 			// Keep Visible to administrator role or for the Pro license owner, remove for non-owner lower-level user types.
 			if ( ! current_user_can( 'manage_options' ) && isset( $additions_actions['find_an_expert'] ) ) {
 				unset( $additions_actions['find_an_expert'] );
+			}
+
+			if ( current_user_can( 'manage_options' ) && API::is_license_expired() ) {
+				// Using 'go-pro' key to style the 'renew' button as the 'go-pro' button
+				$additions_actions['go-pro'] = [
+					'title' => esc_html__( 'Renew Now', 'elementor-pro' ),
+					'link' => 'https://go.elementor.com/overview-widget-renew/',
+				];
 			}
 
 			return $additions_actions;
@@ -699,7 +795,7 @@ class Admin {
 		add_filter( 'elementor/api/get_templates/body_args', [ $this, 'filter_library_get_templates_args' ] );
 		add_filter( 'elementor/finder/categories', [ $this, 'add_finder_item' ] );
 		add_filter( 'plugin_action_links_' . ELEMENTOR_PRO_PLUGIN_BASE, [ $this, 'plugin_action_links' ], 50 );
-		//add_filter( 'plugin_auto_update_setting_html', [ $this, 'plugin_auto_update_setting_html' ], 10, 2 );
+		add_filter( 'plugin_auto_update_setting_html', [ $this, 'plugin_auto_update_setting_html' ], 10, 2 );
 
 		$this->handle_dashboard_admin_widget();
 	}
